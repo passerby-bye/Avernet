@@ -214,47 +214,107 @@ describe('服务化 Coding Bot 的草稿/预发独立入口', () => {
   });
 });
 
-describe('Bot 授权入口跟随空间类型', () => {
-  test('团队空间 Owner 可授权，个人空间即使 Bot 标记为团队归属也不展示', () => {
+describe('Bot 授权入口门禁', () => {
+  test('非 AI Coding 的个人 Bot 在任何空间都不展示授权或申请入口', () => {
     const teamBot = mapBotDto({
-      bot_id: 'team-bot',
+      bot_id: 'personal-openclaw-team-bot',
+      bot_type: 'personal',
       engine: 'openclaw',
       space: { space_id: '12', kind: 'team' },
       actions: ['view'],
     }).item;
-    const personalBot = {
-      ...teamBot,
-      spaceKind: 'personal' as const,
-      ownership: 'team' as const,
-    };
+    const personalSpaceBot = { ...teamBot, spaceKind: 'personal' as const };
 
-    expect(getBotCollaborationMode(teamBot, true)).toBe('authorize');
-    expect(getBotCollaborationMode(teamBot, false)).toBe('request');
-    expect(getBotCollaborationMode(personalBot, true)).toBeUndefined();
-    expect(getBotCollaborationMode(personalBot, false)).toBeUndefined();
+    expect(getBotCollaborationMode(teamBot, true)).toBeUndefined();
+    expect(getBotCollaborationMode(teamBot, false)).toBeUndefined();
+    expect(getBotCollaborationMode(personalSpaceBot, true)).toBeUndefined();
+    expect(getBotCollaborationMode(personalSpaceBot, false)).toBeUndefined();
+  });
+
+  test('AI Coding 个人 Bot 与非个人 Bot 保留团队空间协作入口', () => {
+    const codingPersonalBot = mapBotDto({
+      bot_id: 'personal-coding-team-bot',
+      bot_type: 'personal',
+      active_engine: 'claude_code',
+      template_type: 'generalCC',
+      space: { space_id: '12', kind: 'team' },
+      actions: ['view'],
+    }).item;
+    const serviceBot = mapBotDto({
+      bot_id: 'service-openclaw-team-bot',
+      bot_type: 'service',
+      kind: 'service',
+      engine: 'openclaw',
+      space: { space_id: '12', kind: 'team' },
+      actions: ['view'],
+    }).item;
+
+    expect(getBotCollaborationMode(codingPersonalBot, true)).toBe('authorize');
+    expect(getBotCollaborationMode(codingPersonalBot, false)).toBe('request');
+    expect(getBotCollaborationMode(serviceBot, true)).toBe('authorize');
+    expect(getBotCollaborationMode(serviceBot, false)).toBe('request');
   });
 });
 
-describe('通用配置菜单项门禁（collab-permission-entry-migration AC-02/AC-03）', () => {
+describe('公开设置菜单项门禁（collab-permission-entry-migration AC-02/AC-03）', () => {
+  // 个人 Bot：不受服务 Bot 发布态约束，用以验证 Owner / 编辑锁门禁。
+  const personalBot = mapBotDto({ bot_id: 'personal-bot', engine: 'openclaw', actions: ['view'] }).item;
+  const publishedServiceBot = {
+    ...mapBotDto({
+      bot_id: 'service-bot',
+      bot_type: 'service',
+      kind: 'service',
+      engine: 'openclaw',
+      actions: ['view'],
+    }).item,
+    serviceMode: 'service' as const,
+    lifecycle: 'running' as const,
+  };
+
   test('Bot 管理员（Owner）且无锁时可打开', () => {
-    expect(getGeneralConfigAvailability(true, false)).toEqual({ enabled: true });
+    expect(getGeneralConfigAvailability(personalBot, true, false)).toEqual({ enabled: true });
   });
 
-  test('非 Bot 管理员禁用并说明原因', () => {
-    expect(getGeneralConfigAvailability(false, false)).toEqual({
+  test('非 Bot Owner 禁用并说明原因', () => {
+    expect(getGeneralConfigAvailability(personalBot, false, false)).toEqual({
       enabled: false,
-      disabledReason: '仅 Bot 管理员可变更通用配置',
+      disabledReason: '仅 Bot Owner 可变更公开设置',
     });
   });
 
   test('他人持编辑锁时禁用并说明原因', () => {
-    expect(getGeneralConfigAvailability(true, true)).toEqual({
+    expect(getGeneralConfigAvailability(personalBot, true, true)).toEqual({
       enabled: false,
       disabledReason: '该 Bot 正被他人编辑，请先抢锁',
     });
   });
 
-  test('非管理员与持锁同时存在时管理员原因优先', () => {
-    expect(getGeneralConfigAvailability(false, true).disabledReason).toBe('仅 Bot 管理员可变更通用配置');
+  test('非 Owner 与持锁同时存在时 Owner 原因优先', () => {
+    expect(getGeneralConfigAvailability(personalBot, false, true).disabledReason).toBe('仅 Bot Owner 可变更公开设置');
+  });
+
+  test('已发布（运行中）的服务 Bot Owner 可打开', () => {
+    expect(getGeneralConfigAvailability(publishedServiceBot, true, false)).toEqual({ enabled: true });
+  });
+
+  test.each(['draft', 'deploying', 'prestable', 'offline', 'failed', 'unknown'] as const)(
+    '服务 Bot 未发布（lifecycle=%s）时 Owner 也禁用，并说明原因',
+    (lifecycle) => {
+      const bot = { ...publishedServiceBot, lifecycle };
+      expect(getGeneralConfigAvailability(bot, true, false)).toEqual({
+        enabled: false,
+        disabledReason: '服务 Bot 未发布前暂不可变更公开设置',
+      });
+    },
+  );
+
+  test('未发布的个人 Bot 不受服务 Bot 发布态约束，仍可打开', () => {
+    const draftPersonalBot = { ...personalBot, lifecycle: 'draft' as const };
+    expect(getGeneralConfigAvailability(draftPersonalBot, true, false)).toEqual({ enabled: true });
+  });
+
+  test('未发布服务 Bot 的非 Owner 命中 Owner 原因优先', () => {
+    const draftServiceBot = { ...publishedServiceBot, lifecycle: 'draft' as const };
+    expect(getGeneralConfigAvailability(draftServiceBot, false, false).disabledReason).toBe('仅 Bot Owner 可变更公开设置');
   });
 });

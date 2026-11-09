@@ -6,6 +6,7 @@ import { TaskLinkedSession } from '@/components/Workspace/TaskLinkedSession';
 import { TaskPanelSwitcherSlot } from '@/components/Workspace/TaskPanelSwitcherSlot';
 import { useTaskPanelNavBinding } from '@/hooks/taskPanelNavBinding';
 import { useSessionTaskPanelBootstrap } from '@/hooks/useSessionTaskPanelBootstrap';
+import { useSessionTaskPanelTab } from '@/hooks/useSessionTaskPanelTab';
 import { useTaskSessionNavigationObserver } from '@/pages/Workspace/Chat/hooks/taskSessionNavigation';
 import { ManagerWorkerTasks } from '@/pages/Workspace/components/GroupChatPane/ManagerWorkerTasks';
 import { ServiceBotRoutingControl } from '@/pages/Workspace/components/Modals/ServiceBotRoutingControl';
@@ -18,12 +19,13 @@ import { ensureReactGlobal } from '@/services/workspace/ensureReactGlobal';
 import { createGroupViaExecute } from '@/services/workspace/groupExecuteService';
 import '@/services/workspace/chatBridge';
 import { useTaskConversationNavigationStore } from '@/stores/taskConversationNavigationStore';
+import { useTaskSidePanelStore } from '@/stores/taskSidePanelStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import * as SidePanelApi from '@tc-chat/ui/es/SidePanel';
 import type { PanelContentProps } from '@tc-chat/ui/es/SidePanelContent';
 import { registerPanelContent } from '@tc-chat/ui/es/SidePanelContent';
 import React, { type ComponentType } from 'react';
-import type { TaskPanelBootstrapHook } from './contracts/taskPanelBootstrap';
+import type { SessionTaskPanelTabHook, TaskPanelBootstrapHook } from './contracts/taskPanelBootstrap';
 import { registerExtensionSlots } from './slots';
 import type {
   AppExtension,
@@ -58,7 +60,11 @@ const TaskPanelAdapterWithUser: ComponentType<PanelContentProps> = (props) => {
   const incoming = props.params ?? {};
   const taskId = typeof incoming.taskId === 'string' ? incoming.taskId : '';
   React.useEffect(() => {
-    if (taskId) useTaskConversationNavigationStore.getState().rememberTaskTab(taskId, props.tab);
+    if (!taskId) return;
+    useTaskConversationNavigationStore.getState().rememberTaskTab(taskId, props.tab);
+    // AixUI 历史卡片没有路由 intent；挂载即说明它已触发当前面板展示，
+    // 记为全局焦点以便 by_session 自动恢复在同一会话多任务时不抢焦点。
+    useTaskSidePanelStore.getState().setActiveTask(taskId);
   }, [props.tab, taskId]);
   // V2 导航按 taskId 分片缝合 taskSidePanelStore(nav 不进 params:params 需可序列化落库,
   // 且跨 tab 的选中/下钻态应由业务 store 统一持有,供 P4 会话联动消费)。hook 无条件调用。
@@ -147,11 +153,13 @@ const openTaskSessionNavigationObserver: NonNullable<
   AppExtensionSlots['taskSessionNavigationObserver']
 > = TaskSessionNavigationObserver;
 const openTaskPanelBootstrap: TaskPanelBootstrapHook = useSessionTaskPanelBootstrap;
+const openSessionTaskPanelTab: SessionTaskPanelTabHook = useSessionTaskPanelTab;
 registerExtensionSlots({
   groupTasks: openGroupTasksSlots,
   groupServiceBotRouting: openGroupServiceBotRoutingSlots,
   taskSessionNavigationObserver: openTaskSessionNavigationObserver,
   taskPanelBootstrap: openTaskPanelBootstrap,
+  sessionTaskPanelTab: openSessionTaskPanelTab,
 });
 
 export const appExtension: AppExtension = {

@@ -5,6 +5,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 from agentclaw.community.utils.avernet_tenant import (
@@ -458,11 +459,11 @@ class FriendCatalogActions:
                 request_id,
             )
             raise BotCatalogSearchUnavailableError() from exc
-        _, backend_bots = self._bot_repository.list_bots_by_owner_bot_pairs(
+        join_started = perf_counter()
+        backend_bots = self._bot_repository.list_catalog_bots_by_owner_bot_pairs(
             [(address.bot_id, address.entity_id) for address in addresses],
-            page=1,
-            page_size=max(len(addresses), 1),
         )
+        join_done = perf_counter()
         bots_by_address = {
             address: bot
             for bot in backend_bots
@@ -545,7 +546,7 @@ class FriendCatalogActions:
         logger.info(
             "[BotPublicService.catalog_search] request_id=%s bcs_count=%s "
             "result_count=%s bcs_only_count=%s description_fallback_count=%s "
-            "entity_fallback_count=%s total=%s",
+            "entity_fallback_count=%s total=%s join_ms=%.1f projection_ms=%.1f",
             request_id,
             len(addresses),
             len(items),
@@ -553,6 +554,8 @@ class FriendCatalogActions:
             description_fallback_count,
             entity_fallback_count,
             total,
+            (join_done - join_started) * 1000,
+            (perf_counter() - join_done) * 1000,
         )
         return {"total": total, "items": items}
 
@@ -607,6 +610,11 @@ class FriendCatalogActions:
             bot_id=address.bot_id,
             entity_id=address.entity_id,
         )
+        skills = self._published_skills(
+            bot=bot,
+            bot_id=address.bot_id,
+            entity_id=address.entity_id,
+        )
         profile = {
             "bot_id": address.bot_id,
             "bot_uuid": normalized_uuid,
@@ -620,13 +628,15 @@ class FriendCatalogActions:
             ),
             "engine_name": str((bot and bot.get("active_engine")) or ""),
             "capabilities": capabilities,
+            "skills": skills,
         }
         logger.info(
             "[BotPublicService.catalog_profile] request_id=%s bot_uuid=%s "
-            "capability_count=%s backend_join=%s",
+            "capability_count=%s skill_count=%s backend_join=%s",
             request_id,
             normalized_uuid,
             len(capabilities),
+            len(skills),
             bot is not None,
         )
         return profile
@@ -696,6 +706,72 @@ class FriendCatalogActions:
                     }
                 )
         return capabilities
+
+    def _published_skills(
+        self,
+        *,
+        bot: Optional[Dict[str, Any]],
+        bot_id: str,
+        entity_id: str,
+    ) -> List[Dict[str, str]]:
+        """已公开技能 = Bot 能力集配置的技能列表（skill_id + display_name，去重）。
+
+        与 MCP 清单同口径：所有能力集（激活/非激活）并集去重，数据源为
+        ``get_all_skill_sets_with_skills``（每个能力集的 ``skills`` 列表）。
+        能力集服务失败只降级为空列表：技能清单纯展示用途，不允许阻断画像返回。
+        """
+        if bot is None:
+            # Backend 无记录（BCS-only）：技能数据在 Backend 能力集表中，无源可查。
+            return []
+        owner_id = str(
+            bot.get("owner_id") or bot.get("entity_id") or entity_id or ""
+        ).strip()
+        bot_key = str(bot.get("bot_id") or bot_id or "").strip()
+        if not owner_id or not bot_key:
+            return []
+        try:
+            skill_set_service = self._skill_set_service_factory.create(
+                entity_id=entity_id or owner_id, bot_id=bot_key
+            )
+            skill_sets = skill_set_service.get_all_skill_sets_with_skills(
+                user_id=owner_id, bolt_id=bot_key
+            )
+        except Exception as exc:  # noqa: BLE001 - skill list is display-only
+            logger.warning(
+                "[BotPublicService.catalog_profile] skills degraded "
+                "bot_id=%s owner_id=%s: %s",
+                bot_key,
+                owner_id,
+                exc,
+            )
+            return []
+        skills: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        if not isinstance(skill_sets, list):
+            return []
+        for skill_set in skill_sets:
+            if not isinstance(skill_set, dict):
+                continue
+            entries = skill_set.get("skills")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                display_name = str(entry.get("name") or "").strip()
+                skill_id = str(entry.get("id") or display_name).strip()
+                if not display_name or not skill_id:
+                    continue
+                if skill_id in seen:
+                    continue
+                seen.add(skill_id)
+                skills.append(
+                    {
+                        "skill_id": skill_id,
+                        "display_name": display_name,
+                    }
+                )
+        return skills
 
     @staticmethod
     def _catalog_address(bot: dict[str, Any]) -> BotCatalogAddress | None:
