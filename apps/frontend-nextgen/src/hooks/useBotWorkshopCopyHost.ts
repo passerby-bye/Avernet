@@ -16,7 +16,7 @@ interface UseBotWorkshopCopyHostOptions {
  * BotStatusCell 的 copy_state 徽标 + 重试入口不渲染。放开时改为 true 即整体启用;
  * 不查后端,纯前端常量。export 出来供 BotStatusCell 同源消费,保证开关一处生效。
  */
-export const BOT_COPY_FEATURE_ENABLED = false;
+export const BOT_COPY_FEATURE_ENABLED = true;
 
 /**
  * 编排「复制 Bot」:源 Bot 引用、Modal 开合、AgentPass 授权面板(不轮询)与列表刷新,
