@@ -1,0 +1,9 @@
+# Versions this player was developed and verified with (Python 3.12).
+langgraph==1.2.19
+langchain-openai==1.7.3
+langchain-core==1.7.3
+websockets==17.4
+httpx==0.28.1
+# tests
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
